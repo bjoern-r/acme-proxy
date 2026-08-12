@@ -1,0 +1,57 @@
+# Copy this file to config.yaml and edit.
+
+# Base zone under which acme-dns-style delegated subdomains are created,
+# e.g. a binding gets fulldomain = "<uuid>.<delegation_zone>"
+delegation_zone: "acme.example.org"
+
+# Master key required in the "X-Admin-Key" header for admin-only HTTP endpoints
+# (not needed for the admin_cli.py, which talks to the DB directly).
+admin_master_key: "change-me-to-a-long-random-string"
+
+database_url: "sqlite:///./acme_proxy.db"
+
+# Which frontend protocols to mount, and at which URL prefix.
+protocols:
+  acmedns:
+    enabled: true
+    prefix: ""            # acme-dns spec expects /register and /update at root
+  generic:
+    enabled: true
+    prefix: "/generic"    # lego-httpreq-style: /generic/present, /generic/cleanup
+
+# Backend routing: first match wins. `match` is either an exact FQDN or a regex
+# (anchor your regex yourself, e.g. with ^...$ / \. escaping, as needed).
+backend_routes:
+  - match: '.*\.lab\.foo\.example\.biz$'
+    regex: true
+    backend: rfc2136_lab
+
+  - match: 'example.com'
+    regex: false
+    backend: acmesh_cloudflare
+
+  - match: '.*'
+    regex: true
+    backend: noop   # fallback: log only, never fails, good for dry-running new setups
+
+backends:
+  rfc2136_lab:
+    driver: rfc2136
+    nameserver: "10.0.0.53"
+    port: 53
+    zone: "lab.foo.example.biz"
+    tsig_key_name: "acme-proxy."
+    tsig_key_secret: "REPLACE_WITH_BASE64_TSIG_SECRET"
+    tsig_algorithm: "hmac-sha256"
+    ttl: 60
+
+  acmesh_cloudflare:
+    driver: acmesh
+    dnsapi_script: dns_cf
+    acme_sh_home: /opt/acme.sh
+    env:
+      CF_Token: "REPLACE_ME"
+      CF_Account_ID: "REPLACE_ME"
+
+  noop:
+    driver: noop

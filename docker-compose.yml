@@ -1,0 +1,20 @@
+#version: "3.8"
+
+# Example deployment. Adjust volumes/paths for your environment.
+#
+#   docker compose up -d --build
+#   docker compose exec acme-proxy python scripts/admin_cli.py create-owner --username team-a
+#
+services:
+  acme-proxy:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/srv/config.yaml:ro
+      - ./data:/srv/data                 # sqlite db lives here if database_url points at /srv/data/...
+      - ./acme.sh:/opt/acme.sh:ro        # only needed if you use the `acmesh` backend driver;
+                                          # a plain `git clone https://github.com/acmesh-official/acme.sh`
+    environment:
+      ACME_PROXY_CONFIG: /srv/config.yaml
+    restart: unless-stopped
