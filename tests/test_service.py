@@ -24,6 +24,7 @@ def app_client(tmp_path: Path, monkeypatch):
         "protocols": {
             "acmedns": {"enabled": True, "prefix": ""},
             "generic": {"enabled": True, "prefix": "/generic"},
+            "technitium": {"enabled": True, "prefix": ""},
         },
         "backend_routes": [{"match": ".*", "regex": True, "backend": "noop"}],
         "backends": {"noop": {"driver": "noop"}},
@@ -193,3 +194,60 @@ def test_allowfrom_restricts_update(app_client):
         json={"subdomain": subdomain, "txt": "value"},
     )
     assert resp.status_code == 401
+
+
+def test_technitium_protocol_add_and_delete(app_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-g")
+    crud.add_permission(db, created.owner, r".*\.example\.net$", is_regex=True)
+    db.close()
+
+    token = f"team-g:{created.plaintext_api_key}"
+
+    add = app_client.get(
+        "/api/zones/records/add",
+        params={"domain": "_acme-challenge.foo.example.net", "type": "TXT", "text": "abc123"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert add.status_code == 200, add.text
+    assert add.json()["status"] == "ok"
+
+    delete = app_client.get(
+        "/api/zones/records/delete",
+        params={"domain": "_acme-challenge.foo.example.net", "type": "TXT", "text": "abc123", "token": token},
+    )
+    assert delete.status_code == 200, delete.text
+    assert delete.json()["status"] == "ok"
+
+
+def test_technitium_protocol_rejects_bad_token(app_client):
+    resp = app_client.get(
+        "/api/zones/records/add",
+        params={"domain": "foo.example.net", "type": "TXT", "text": "abc123"},
+        headers={"Authorization": "Bearer team-g:wrong-key"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "invalid-token"
+
+
+def test_technitium_protocol_rejects_unauthorized_domain(app_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-h")
+    crud.add_permission(db, created.owner, "allowed.example.net", is_regex=False)
+    db.close()
+
+    token = f"team-h:{created.plaintext_api_key}"
+
+    resp = app_client.get(
+        "/api/zones/records/add",
+        params={"domain": "not-allowed.example.net", "type": "TXT", "text": "abc123"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "error"

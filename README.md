@@ -14,25 +14,26 @@ without running your own authoritative nameserver.
 ACME client (Traefik/acme.sh/lego/...)
         │  speaks one of several *frontend protocols*
         ▼
-┌─────────────────────────────────────────────────┐
-│  FastAPI app  (app/main.py)                     │
-│                                                 │
-│  protocols/  (pluggable, mounted routers)       │
-│    - acmedns.py   -> acme-dns protocol          │
-│    - generic.py   -> lego-httpreq-style REST    │
-│    - ...add your own...                         │
-│                                                 │
-│  auth.py + hostmatch.py                         │
-│    - authenticate the caller                    │
-│    - authorize requested hostname               │
-│      (exact match OR regex, per user)           │
-│                                                 │
-│  backends/  (pluggable upstream drivers)        │
-│    - acmesh.py   -> reuses acme.sh dnsapi/*.sh  │
-│    - rfc2136.py  -> native RFC2136 DNS UPDATE   │
-│    - noop.py     -> logs only, for testing      │
-│    - ...add your own...                         │
-└─────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│  FastAPI app  (app/main.py)                           │
+│                                                       │
+│  protocols/  (pluggable, mounted routers)             │
+│    - acmedns.py     -> acme-dns protocol              │
+│    - generic.py     -> lego-httpreq-style REST        │
+│    - technitium.py  -> impersonates Technitium's API  │
+│    - ...add your own...                               │
+│                                                       │
+│  auth.py + hostmatch.py                               │
+│    - authenticate the caller                          │
+│    - authorize requested hostname                     │
+│      (exact match OR regex, per user)                 │
+│                                                       │
+│  backends/  (pluggable upstream drivers)              │
+│    - acmesh.py   -> reuses acme.sh dnsapi/*.sh        │
+│    - rfc2136.py  -> native RFC2136 DNS UPDATE         │
+│    - noop.py     -> logs only, for testing            │
+│    - ...add your own...                               │
+└───────────────────────────────────────────────────────┘
         │
         ▼
    real upstream DNS (Cloudflare, PowerDNS, BIND, ...)
@@ -119,6 +120,29 @@ The generic protocol checks the owner's permissions on every call, so there's no
 binding step. Just give the ACME client the owner's own API key and point it at
 `/generic/present` and `/generic/cleanup` (see `app/protocols/generic.py` for the exact
 request/response shape — it mirrors lego's `httpreq` provider).
+
+### 2c. technitium protocol: impersonates a real Technitium DNS Server
+
+Like the generic protocol, this checks permissions on every call — no binding step.
+It impersonates the record-management subset of
+[Technitium DNS Server's HTTP API](https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md)
+(`/api/zones/records/add` and `/api/zones/records/delete`), so any ACME hook already
+written against a *real* Technitium server — e.g. acme.sh's `dns_technitium` provider —
+works unmodified if pointed at this proxy instead.
+
+The one wrinkle: the real API authenticates with a single opaque bearer token (no
+separate username field), but this proxy's owners are looked up by username. So the
+"Technitium API token" you hand to the ACME client is `"<owner-username>:<owner-api-key>"`
+— just concatenate the two values `create-owner` printed:
+
+```bash
+python scripts/admin_cli.py create-owner --username team-a --description "5G testbed"
+# X-Api-Key: <api-key>  ->  Technitium token = "team-a:<api-key>"
+```
+
+Configure the ACME client the same way you would for a real Technitium server, e.g. for
+acme.sh: `export Technitium_Server=http://<this-proxy-host>:8000` and
+`export Technitium_Token=team-a:<api-key>`, then `acme.sh --issue --dns dns_technitium ...`.
 
 ## Backend routing (`config.yaml`)
 

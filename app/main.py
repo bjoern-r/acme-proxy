@@ -9,6 +9,7 @@ from app.database import init_db
 from app.protocols.acmedns import AcmeDnsProtocol
 from app.protocols.base import FrontendProtocolBase
 from app.protocols.generic import GenericProtocol
+from app.protocols.technitium import TechnitiumProtocol
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -17,6 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 AVAILABLE_PROTOCOLS: dict[str, type[FrontendProtocolBase]] = {
     "acmedns": AcmeDnsProtocol,
     "generic": GenericProtocol,
+    "technitium": TechnitiumProtocol,
 }
 
 

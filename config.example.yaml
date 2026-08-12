@@ -18,6 +18,14 @@ protocols:
   generic:
     enabled: true
     prefix: "/generic"    # lego-httpreq-style: /generic/present, /generic/cleanup
+  technitium:
+    enabled: false        # impersonates Technitium DNS Server's HTTP API so ACME
+                           # clients/hooks that already speak it (e.g. acme.sh's
+                           # dns_technitium) can point here unmodified. The API token
+                           # such a client is given must be "<owner-username>:<owner-
+                           # api-key>" -- see app/protocols/technitium.py. Enable once
+                           # you've generated that token for the owner in question.
+    prefix: ""             # matches the real server's own /api/... paths
 
 # Backend routing: first match wins. `match` is either an exact FQDN or a regex
 # (anchor your regex yourself, e.g. with ^...$ / \. escaping, as needed).
