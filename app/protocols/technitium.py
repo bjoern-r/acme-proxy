@@ -33,7 +33,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app import crud
@@ -45,6 +46,102 @@ from app.protocols.base import FrontendProtocolBase
 from app.security import verify_secret
 
 logger = logging.getLogger("acme_proxy.protocols.technitium")
+
+# Documentation-only: the real params are (re-)parsed from the raw `Request` in
+# `_request_params`/`_extract_token` so both GET query-string and POST form-encoded
+# submissions work identically -- FastAPI can't infer that dual shape from a plain
+# `Request` argument, so these declarations exist purely to populate the OpenAPI
+# schema/Swagger UI and are otherwise unused by the handler.
+_bearer_scheme = HTTPBearer(
+    auto_error=False,
+    description="Owner credential, formatted as \"<owner-username>:<owner-api-key>\" "
+    "(the api-key printed by `create-owner`, concatenated with the username).",
+)
+_TOKEN_DESCRIPTION = (
+    'Owner credential as "<owner-username>:<owner-api-key>". Accepted as a query '
+    "parameter (GET) or form field (POST) for compatibility with the real "
+    "Technitium API; the Authorization: Bearer header above is equivalent and takes "
+    "precedence if both are supplied."
+)
+_DOMAIN_DESCRIPTION = "Fully-qualified domain name to add/remove the TXT record for, e.g. _acme-challenge.example.com."
+_TYPE_DESCRIPTION = 'Record type. Must be the literal string "TXT" -- no other record type is supported.'
+_TEXT_DESCRIPTION = "TXT record value, i.e. the ACME DNS-01 challenge token."
+
+_RESPONSE_SCHEMA = {
+    "description": "Always HTTP 200 -- clients must inspect the `status` field, per the real Technitium API.",
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok", "error", "invalid-token"],
+                    },
+                    "response": {
+                        "type": "object",
+                        "description": "Present when status is 'ok'.",
+                    },
+                    "errorMessage": {
+                        "type": "string",
+                        "description": "Present when status is 'error'.",
+                    },
+                },
+                "required": ["status"],
+            }
+        }
+    },
+}
+
+_ADD_RESPONSES = {
+    200: {
+        **_RESPONSE_SCHEMA,
+        "content": {
+            "application/json": {
+                **_RESPONSE_SCHEMA["content"]["application/json"],
+                "examples": {
+                    "ok": {
+                        "summary": "Record added",
+                        "value": {
+                            "status": "ok",
+                            "response": {
+                                "addedRecord": {
+                                    "name": "_acme-challenge.example.com",
+                                    "type": "TXT",
+                                    "rData": {"text": "<challenge-token>"},
+                                }
+                            },
+                        },
+                    },
+                    "invalid-token": {"summary": "Authentication failed", "value": {"status": "invalid-token"}},
+                    "error": {
+                        "summary": "Request rejected",
+                        "value": {"status": "error", "errorMessage": "<reason>"},
+                    },
+                },
+            }
+        },
+    }
+}
+
+_DELETE_RESPONSES = {
+    200: {
+        **_RESPONSE_SCHEMA,
+        "content": {
+            "application/json": {
+                **_RESPONSE_SCHEMA["content"]["application/json"],
+                "examples": {
+                    "ok": {"summary": "Record deleted", "value": {"status": "ok", "response": {}}},
+                    "invalid-token": {"summary": "Authentication failed", "value": {"status": "invalid-token"}},
+                    "error": {
+                        "summary": "Request rejected",
+                        "value": {"status": "error", "errorMessage": "<reason>"},
+                    },
+                },
+            }
+        },
+    }
+}
 
 
 async def _request_params(request: Request) -> dict[str, str]:
@@ -123,12 +220,40 @@ class TechnitiumProtocol(FrontendProtocolBase):
                 logger.exception("backend %s() failed for %s", action, domain)
                 return {"status": "error", "errorMessage": f"upstream DNS update failed: {exc}"}
 
-        @router.api_route("/api/zones/records/add", methods=["GET", "POST"])
-        async def add_record(request: Request, db: Session = Depends(get_db)) -> dict:
+        @router.api_route(
+            "/api/zones/records/add",
+            methods=["GET", "POST"],
+            summary="Add a TXT record (Technitium API impersonation)",
+            description=__doc__,
+            responses=_ADD_RESPONSES,
+        )
+        async def add_record(
+            request: Request,
+            db: Session = Depends(get_db),
+            _credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+            token: str | None = Query(None, description=_TOKEN_DESCRIPTION),
+            domain: str | None = Query(None, description=_DOMAIN_DESCRIPTION),
+            type: str | None = Query(None, alias="type", description=_TYPE_DESCRIPTION),  # noqa: A002
+            text: str | None = Query(None, description=_TEXT_DESCRIPTION),
+        ) -> dict:
             return await handle(request, db, "add")
 
-        @router.api_route("/api/zones/records/delete", methods=["GET", "POST"])
-        async def delete_record(request: Request, db: Session = Depends(get_db)) -> dict:
+        @router.api_route(
+            "/api/zones/records/delete",
+            methods=["GET", "POST"],
+            summary="Delete a TXT record (Technitium API impersonation)",
+            description=__doc__,
+            responses=_DELETE_RESPONSES,
+        )
+        async def delete_record(
+            request: Request,
+            db: Session = Depends(get_db),
+            _credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+            token: str | None = Query(None, description=_TOKEN_DESCRIPTION),
+            domain: str | None = Query(None, description=_DOMAIN_DESCRIPTION),
+            type: str | None = Query(None, alias="type", description=_TYPE_DESCRIPTION),  # noqa: A002
+            text: str | None = Query(None, description=_TEXT_DESCRIPTION),
+        ) -> dict:
             return await handle(request, db, "delete")
 
         return router
