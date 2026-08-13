@@ -8,7 +8,7 @@ delegation_zone: "acme.example.org"
 # (not needed for the admin_cli.py, which talks to the DB directly).
 admin_master_key: "change-me-to-a-long-random-string"
 
-database_url: "sqlite:///./acme_proxy.db"
+database_url: "sqlite:///./data/acme_proxy.db"
 
 # Which frontend protocols to mount, and at which URL prefix.
 protocols:
