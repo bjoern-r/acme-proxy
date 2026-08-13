@@ -12,6 +12,7 @@ Examples:
     python scripts/admin_cli.py add-permission --owner team-a \\
         --pattern '.*\\.lab\\.foo\\.example\\.biz$' --regex
     python scripts/admin_cli.py create-binding --owner team-a --fqdn n104.lab.foo.example.biz
+    python scripts/admin_cli.py list-owners
     python scripts/admin_cli.py list-owner --username team-a
 """
 from __future__ import annotations
@@ -138,6 +139,24 @@ def delete_permission(owner: str = typer.Option(...), permission_id: int = typer
             typer.echo(str(exc), err=True)
             raise typer.Exit(1)
         typer.echo(f"deleted permission {permission_id} from owner {owner!r}")
+    finally:
+        db.close()
+
+
+@cli.command(name="list-owners")
+def list_owners() -> None:
+    """List all owners in the database."""
+    db = SessionLocal()
+    try:
+        owners = crud.list_owners(db)
+        if not owners:
+            typer.echo("no owners")
+            return
+        for owner in owners:
+            typer.echo(
+                f"{owner.username}\t{owner.description or ''}"
+                f"\tpermissions={len(owner.permissions)} bindings={len(owner.bindings)}"
+            )
     finally:
         db.close()
 

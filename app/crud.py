@@ -49,6 +49,10 @@ def get_owner_by_username(db: Session, username: str) -> Owner | None:
     return db.scalar(select(Owner).where(Owner.username == username))
 
 
+def list_owners(db: Session) -> list[Owner]:
+    return list(db.scalars(select(Owner).order_by(Owner.username)))
+
+
 def add_permission(db: Session, owner: Owner, pattern: str, is_regex: bool) -> HostnamePermission:
     perm = HostnamePermission(owner_id=owner.id, pattern=pattern, is_regex=is_regex)
     db.add(perm)
