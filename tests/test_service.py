@@ -322,6 +322,108 @@ def test_generic_protocol_rejects_unauthorized_fqdn(app_client):
     assert resp.status_code == 403
 
 
+def test_generic_protocol_accepts_binding_credentials_for_matching_fqdn(app_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created_owner = crud.create_owner(db, "team-generic-binding")
+    crud.add_permission(db, created_owner.owner, "gnb-binding.lab.example.com", is_regex=False)
+    created_binding = crud.create_binding(db, created_owner.owner, "gnb-binding.lab.example.com")
+    username = created_binding.binding.username
+    password = created_binding.plaintext_password
+    db.close()
+
+    headers = {"X-Api-User": username, "X-Api-Key": password}
+
+    present = app_client.post(
+        "/generic/present",
+        headers=headers,
+        json={"fqdn": "_acme-challenge.gnb-binding.lab.example.com", "value": "abc123"},
+    )
+    assert present.status_code == 200, present.text
+
+    # bare fqdn (no "_acme-challenge." prefix) is also accepted
+    present_bare = app_client.post(
+        "/generic/present",
+        headers=headers,
+        json={"fqdn": "gnb-binding.lab.example.com", "value": "abc123"},
+    )
+    assert present_bare.status_code == 200, present_bare.text
+
+    cleanup = app_client.post(
+        "/generic/cleanup",
+        headers=headers,
+        json={"fqdn": "_acme-challenge.gnb-binding.lab.example.com", "value": "abc123"},
+    )
+    assert cleanup.status_code == 200, cleanup.text
+
+
+def test_generic_protocol_rejects_binding_credentials_for_other_fqdn(app_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created_owner = crud.create_owner(db, "team-generic-scope")
+    crud.add_permission(db, created_owner.owner, r".*\.lab\.example\.com$", is_regex=True)
+    created_binding = crud.create_binding(db, created_owner.owner, "scoped.lab.example.com")
+    username = created_binding.binding.username
+    password = created_binding.plaintext_password
+    db.close()
+
+    resp = app_client.post(
+        "/generic/present",
+        headers={"X-Api-User": username, "X-Api-Key": password},
+        json={"fqdn": "_acme-challenge.other.lab.example.com", "value": "abc123"},
+    )
+    assert resp.status_code == 403
+
+
+def test_generic_protocol_rejects_revoked_binding_credentials(app_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created_owner = crud.create_owner(db, "team-generic-revoked")
+    crud.add_permission(db, created_owner.owner, "revoked-generic.example.com", is_regex=False)
+    created_binding = crud.create_binding(db, created_owner.owner, "revoked-generic.example.com")
+    crud.revoke_binding(db, created_binding.binding)
+    username = created_binding.binding.username
+    password = created_binding.plaintext_password
+    db.close()
+
+    resp = app_client.post(
+        "/generic/present",
+        headers={"X-Api-User": username, "X-Api-Key": password},
+        json={"fqdn": "_acme-challenge.revoked-generic.example.com", "value": "abc123"},
+    )
+    assert resp.status_code == 401
+
+
+def test_generic_protocol_binding_credentials_respect_allowfrom(app_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created_owner = crud.create_owner(db, "team-allowfrom-generic")
+    crud.add_permission(db, created_owner.owner, "restricted-generic.example.com", is_regex=False)
+    created_binding = crud.create_binding(
+        db, created_owner.owner, "restricted-generic.example.com", allowfrom="203.0.113.0/24"
+    )
+    username = created_binding.binding.username
+    password = created_binding.plaintext_password
+    db.close()
+
+    # TestClient's default client IP is 127.0.0.1 (testserver), which is outside the
+    # allowed 203.0.113.0/24 block, so this must be rejected.
+    resp = app_client.post(
+        "/generic/present",
+        headers={"X-Api-User": username, "X-Api-Key": password},
+        json={"fqdn": "_acme-challenge.restricted-generic.example.com", "value": "abc123"},
+    )
+    assert resp.status_code == 401
+
+
 def test_revoked_binding_rejected(app_client):
     from app import crud
     from app.database import SessionLocal

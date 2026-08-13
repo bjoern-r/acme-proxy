@@ -137,6 +137,12 @@ binding step. Just give the ACME client the owner's own API key and point it at
 `/generic/present` and `/generic/cleanup` (see `app/protocols/generic.py` for the exact
 request/response shape — it mirrors lego's `httpreq` provider).
 
+It also accepts an acme-dns Binding's scoped username/password (from `create-binding`,
+2a above) in place of the owner's API key — the request's `fqdn` must then match that
+binding's own fqdn (`allowfrom`/revocation are enforced too, same as the acme-dns
+protocol). Handy for handing a client the same narrow, one-hostname credential
+whether it happens to speak acme-dns or the generic protocol.
+
 ### 2c. technitium protocol: impersonates a real Technitium DNS Server
 
 Like the generic protocol, this checks permissions on every call — no binding step.

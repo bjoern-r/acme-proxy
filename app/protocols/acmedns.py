@@ -44,19 +44,11 @@ from app.auth import get_current_binding, require_admin_key
 from app.backends.registry import UnroutableHostname, get_registry
 from app.config import get_settings
 from app.database import get_db
-from app.hostmatch import is_ip_allowed
+from app.hostmatch import is_ip_allowed, matches_fqdn_or_challenge
 from app.models import Binding
 from app.protocols.base import FrontendProtocolBase
 
 logger = logging.getLogger("acme_proxy.protocols.acmedns")
-
-_ACME_CHALLENGE_PREFIX = "_acme-challenge."
-
-
-def _matches_fqdn(candidate: str, fqdn: str) -> bool:
-    candidate = candidate.rstrip(".").lower()
-    fqdn = fqdn.rstrip(".").lower()
-    return candidate == fqdn or candidate == f"{_ACME_CHALLENGE_PREFIX}{fqdn}"
 
 
 class RegisterRequest(BaseModel):
@@ -130,7 +122,7 @@ class AcmeDnsProtocol(FrontendProtocolBase):
             protocol_cfg = settings.protocols.get("acmedns")
             accept_fqdn_as_subdomain = bool(protocol_cfg and protocol_cfg.accept_fqdn_as_subdomain)
 
-            matched_fqdn = accept_fqdn_as_subdomain and _matches_fqdn(req.subdomain, binding.fqdn)
+            matched_fqdn = accept_fqdn_as_subdomain and matches_fqdn_or_challenge(req.subdomain, binding.fqdn)
             if req.subdomain != binding.subdomain and not matched_fqdn:
                 # Matches real acme-dns behaviour: credentials are scoped to exactly
                 # one subdomain; requesting a different one is a hard auth failure.

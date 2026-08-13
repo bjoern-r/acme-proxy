@@ -42,6 +42,17 @@ def is_authorized_for_challenge(fqdn: str, permissions: list[HostnamePermission]
     return False
 
 
+def matches_fqdn_or_challenge(candidate: str, fqdn: str) -> bool:
+    """True if `candidate` is exactly `fqdn`, or `_acme-challenge.<fqdn>` -- i.e.
+    whether a DNS-01 request for `candidate` is a request for the challenge record of
+    `fqdn`. Same "match either spelling" rule as `is_authorized_for_challenge`, but
+    for a single known fqdn (e.g. a Binding's own scope) rather than a permission
+    pattern list."""
+    candidate = candidate.rstrip(".").lower()
+    fqdn = fqdn.rstrip(".").lower()
+    return candidate == fqdn or candidate == f"{_ACME_CHALLENGE_PREFIX}{fqdn}"
+
+
 def is_ip_allowed(client_ip: str, allowfrom: str | None) -> bool:
     """`allowfrom` is a comma-separated list of CIDR blocks, mirroring acme-dns's own
     `allowfrom` field. Empty/None means unrestricted (matches acme-dns default)."""
