@@ -48,7 +48,12 @@ class CleanupRequest(BaseModel):
 
 
 class ChallengeResponse(BaseModel):
-    ok: bool = True
+    """Echoes the request back, matching the real acmeproxy.pl/lego `httpreq`
+    convention this protocol mirrors -- callers don't inspect this body, they just
+    expect HTTP 200 on success, but the shape still needs to match."""
+
+    fqdn: str
+    value: str | None = None
 
 
 class GenericProtocol(FrontendProtocolBase):
@@ -100,7 +105,7 @@ class GenericProtocol(FrontendProtocolBase):
             except Exception as exc:  # noqa: BLE001
                 logger.exception("backend present() failed for %s", req.fqdn)
                 raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"upstream DNS update failed: {exc}") from exc
-            return ChallengeResponse()
+            return ChallengeResponse(fqdn=req.fqdn, value=req.value)
 
         @router.post("/cleanup", response_model=ChallengeResponse)
         def cleanup(
@@ -114,6 +119,6 @@ class GenericProtocol(FrontendProtocolBase):
                 backend.cleanup(req.fqdn, req.value or "")
             except Exception as exc:  # noqa: BLE001 -- cleanup failures shouldn't block issuance
                 logger.warning("backend cleanup() failed for %s: %s", req.fqdn, exc)
-            return ChallengeResponse()
+            return ChallengeResponse(fqdn=req.fqdn, value=req.value)
 
         return router

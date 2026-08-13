@@ -38,15 +38,15 @@ _secure_debug3() { :; }
 # encoding helpers
 # ---------------------------------------------------------------------------
 _base64() {
-  if [ "${1:-}" = "multiline" ]; then
+  if [ -n "${1:-}" ]; then
     openssl base64 -e
   else
-    openssl base64 -e | tr -d '\n'
+    openssl base64 -e | tr -d '\r\n'
   fi
 }
 
 _dbase64() {
-  if [ "${1:-}" = "multiline" ]; then
+  if [ -n "${1:-}" ]; then
     openssl base64 -d
   else
     openssl base64 -d 2>/dev/null
@@ -69,22 +69,47 @@ _hex_dump() {
   od -A n -t x1 | tr -d " \n"
 }
 
-# _hmac <key> <alg: sha256|sha1|md5> [hex output flag - ignored, always hex]
-# reads the data to be signed from stdin, mirroring acme.sh's usage pattern.
-_hmac() {
-  local key="$1" alg="${2:-sha256}"
-  openssl dgst "-${alg}" -hmac "$key" | awk '{print $NF}'
+# _h2b -- hex string on stdin -> raw binary on stdout. Real acme.sh helper, needed by
+# _hmac's fallback path for openssl versions without `-mac HMAC -macopt hexkey:...`.
+_h2b() {
+  if command -v xxd >/dev/null 2>&1; then
+    xxd -r -p
+  else
+    local hex
+    hex="$(cat)"
+    # shellcheck disable=SC2059
+    printf "$(echo "$hex" | tr 'a-f' 'A-F' | sed 's/\([0-9A-F]\{2\}\)/\\x\1/g')"
+  fi
 }
 
-_utc_date() { date -u "+%a, %d %b %Y %H:%M:%S GMT"; }
+# _hmac <alg: sha256|sha1> <secret_hex> [outputhex]
+# reads the data to be signed from stdin. Matches real acme.sh's parameter order and
+# semantics exactly -- notably that the secret is HEX-ENCODED (callers pass it through
+# `_hex_dump` first), not a literal passphrase; getting either of those wrong produces
+# a wrong signature (or, if the argument positions are swapped, an outright
+# "Unknown option or message digest" openssl error).
+_hmac() {
+  local alg="$1" secret_hex="$2" outputhex="$3"
+  if [ -n "$outputhex" ]; then
+    { openssl dgst "-${alg}" -mac HMAC -macopt "hexkey:${secret_hex}" 2>/dev/null \
+      || openssl dgst "-${alg}" -hmac "$(printf '%s' "$secret_hex" | _h2b)"; } | cut -d = -f2 | tr -d ' '
+  else
+    openssl dgst "-${alg}" -mac HMAC -macopt "hexkey:${secret_hex}" -binary 2>/dev/null \
+      || openssl dgst "-${alg}" -hmac "$(printf '%s' "$secret_hex" | _h2b)" -binary
+  fi
+}
+
+_utc_date() { date -u "+%Y-%m-%d %H:%M:%S"; }
 _time()     { date -u "+%s"; }
 
 _lower_case() { tr 'A-Z' 'a-z'; }
 _upper_case() { tr 'a-z' 'A-Z'; }
 
-_startswith() { case "$1" in "$2"*) return 0 ;; *) return 1 ;; esac; }
-_endswith()   { case "$1" in *"$2") return 0 ;; *) return 1 ;; esac; }
-_contains()   { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
+# real acme.sh implements these with grep, so $2 is a REGEX, not a literal/glob --
+# matters for any dnsapi script that passes regex metacharacters.
+_startswith() { echo "$1" | grep -- "^$2" >/dev/null 2>&1; }
+_endswith()   { echo "$1" | grep -- "$2\$" >/dev/null 2>&1; }
+_contains()   { echo "$1" | grep -- "$2" >/dev/null 2>&1; }
 
 # text-processing helpers used by many providers' record-parsing logic
 _egrep_o() { grep -E -o "$1"; }
@@ -125,15 +150,31 @@ _curl_headers() {
   for h in "${_H1:-}" "${_H2:-}" "${_H3:-}" "${_H4:-}" "${_H5:-}"; do
     [ -n "$h" ] && args+=(-H "$h")
   done
-  printf '%s\0' "${args[@]}"
+  # Guard needed because `printf '%s\0'` with a truly empty "$@" still runs once,
+  # substituting an empty string for the missing %s -- producing one phantom NUL byte
+  # instead of no output at all. Callers' read loops would then pick up a bogus empty
+  # argument even when no _H1.._H5 headers are set, which recent curl (8.18+) rejects
+  # outright as "option : blank argument where content is expected".
+  [ "${#args[@]}" -gt 0 ] && printf '%s\0' "${args[@]}"
+  return 0
 }
 
 _post() {
-  # _post body url [needbase64] [httpmethod]
-  local body="$1" url="$2" method="${4:-POST}"
+  # _post body url [needbase64] [httpmethod] [postContentType]
+  # Matches real acme.sh's _post signature -- notably $5, the request Content-Type.
+  # Some dnsapi scripts (e.g. dns_acmedns.sh) rely on it to get "application/json"
+  # set explicitly; without it curl defaults to
+  # "application/x-www-form-urlencoded" for -d/--data, which breaks JSON APIs that
+  # validate Content-Type strictly.
+  local body="$1" url="$2" needbase64="$3" method="${4:-POST}" content_type="$5"
   local -a headers=()
   while IFS= read -r -d '' arg; do headers+=("$arg"); done < <(_curl_headers)
-  curl -sS --max-time 30 -X "$method" "${headers[@]}" -d "$body" "$url"
+  [ -n "$content_type" ] && headers=(-H "Content-Type: $content_type" "${headers[@]}")
+  if [ -n "$needbase64" ]; then
+    curl -sS --max-time 30 -X "$method" "${headers[@]}" -d "$body" "$url" | _base64
+  else
+    curl -sS --max-time 30 -X "$method" "${headers[@]}" -d "$body" "$url"
+  fi
 }
 
 _get() {

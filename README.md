@@ -133,13 +133,17 @@ subdomain; a request matched this way always writes directly to
 ### 2b. generic protocol: no pre-registration needed
 
 The generic protocol checks the owner's permissions on every call, so there's no
-binding step. Just give the ACME client the owner's own API key and point it at
+binding step. It authenticates with HTTP Basic auth (owner username as the basic-auth
+username, owner API key as the password) — matching the real acmeproxy.pl/lego
+`httpreq` convention, not a custom header scheme. Just give the ACME client the
+owner's own username/API key as its basic-auth credentials and point it at
 `/generic/present` and `/generic/cleanup` (see `app/protocols/generic.py` for the exact
-request/response shape — it mirrors lego's `httpreq` provider).
+request/response shape).
 
 It also accepts an acme-dns Binding's scoped username/password (from `create-binding`,
-2a above) in place of the owner's API key — the request's `fqdn` must then match that
-binding's own fqdn (`allowfrom`/revocation are enforced too, same as the acme-dns
+2a above) as the basic-auth credentials, in place of the owner's API key — the
+request's `fqdn` must then match that binding's own fqdn (`allowfrom`/revocation are
+enforced too, same as the acme-dns
 protocol). Handy for handing a client the same narrow, one-hostname credential
 whether it happens to speak acme-dns or the generic protocol.
 

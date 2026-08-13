@@ -258,28 +258,31 @@ def test_generic_protocol_present_and_cleanup(app_client):
     crud.add_permission(db, created.owner, r".*\.example\.org$", is_regex=True)
     db.close()
 
-    headers = {"X-Api-User": "team-c", "X-Api-Key": created.plaintext_api_key}
+    auth = ("team-c", created.plaintext_api_key)
 
     present = app_client.post(
         "/generic/present",
-        headers=headers,
+        auth=auth,
         json={"fqdn": "_acme-challenge.foo.example.org", "value": "abc123"},
     )
     assert present.status_code == 200, present.text
+    assert present.json() == {"fqdn": "_acme-challenge.foo.example.org", "value": "abc123"}
 
     cleanup = app_client.post(
         "/generic/cleanup",
-        headers=headers,
+        auth=auth,
         json={"fqdn": "_acme-challenge.foo.example.org", "value": "abc123"},
     )
     assert cleanup.status_code == 200, cleanup.text
+    assert cleanup.json() == {"fqdn": "_acme-challenge.foo.example.org", "value": "abc123"}
 
     cleanup_no_value = app_client.post(
         "/generic/cleanup",
-        headers=headers,
+        auth=auth,
         json={"fqdn": "_acme-challenge.foo.example.org"},
     )
     assert cleanup_no_value.status_code == 200, cleanup_no_value.text
+    assert cleanup_no_value.json() == {"fqdn": "_acme-challenge.foo.example.org", "value": None}
 
 
 def test_generic_protocol_exact_permission_covers_acme_challenge_prefix(app_client):
@@ -295,10 +298,9 @@ def test_generic_protocol_exact_permission_covers_acme_challenge_prefix(app_clie
     crud.add_permission(db, created.owner, "exact.example.org", is_regex=False)
     db.close()
 
-    headers = {"X-Api-User": "team-j", "X-Api-Key": created.plaintext_api_key}
     present = app_client.post(
         "/generic/present",
-        headers=headers,
+        auth=("team-j", created.plaintext_api_key),
         json={"fqdn": "_acme-challenge.exact.example.org", "value": "abc123"},
     )
     assert present.status_code == 200, present.text
@@ -313,10 +315,9 @@ def test_generic_protocol_rejects_unauthorized_fqdn(app_client):
     crud.add_permission(db, created.owner, "allowed.example.org", is_regex=False)
     db.close()
 
-    headers = {"X-Api-User": "team-d", "X-Api-Key": created.plaintext_api_key}
     resp = app_client.post(
         "/generic/present",
-        headers=headers,
+        auth=("team-d", created.plaintext_api_key),
         json={"fqdn": "_acme-challenge.not-allowed.example.org", "value": "abc123"},
     )
     assert resp.status_code == 403
@@ -334,11 +335,11 @@ def test_generic_protocol_accepts_binding_credentials_for_matching_fqdn(app_clie
     password = created_binding.plaintext_password
     db.close()
 
-    headers = {"X-Api-User": username, "X-Api-Key": password}
+    auth = (username, password)
 
     present = app_client.post(
         "/generic/present",
-        headers=headers,
+        auth=auth,
         json={"fqdn": "_acme-challenge.gnb-binding.lab.example.com", "value": "abc123"},
     )
     assert present.status_code == 200, present.text
@@ -346,14 +347,14 @@ def test_generic_protocol_accepts_binding_credentials_for_matching_fqdn(app_clie
     # bare fqdn (no "_acme-challenge." prefix) is also accepted
     present_bare = app_client.post(
         "/generic/present",
-        headers=headers,
+        auth=auth,
         json={"fqdn": "gnb-binding.lab.example.com", "value": "abc123"},
     )
     assert present_bare.status_code == 200, present_bare.text
 
     cleanup = app_client.post(
         "/generic/cleanup",
-        headers=headers,
+        auth=auth,
         json={"fqdn": "_acme-challenge.gnb-binding.lab.example.com", "value": "abc123"},
     )
     assert cleanup.status_code == 200, cleanup.text
@@ -373,7 +374,7 @@ def test_generic_protocol_rejects_binding_credentials_for_other_fqdn(app_client)
 
     resp = app_client.post(
         "/generic/present",
-        headers={"X-Api-User": username, "X-Api-Key": password},
+        auth=(username, password),
         json={"fqdn": "_acme-challenge.other.lab.example.com", "value": "abc123"},
     )
     assert resp.status_code == 403
@@ -394,7 +395,7 @@ def test_generic_protocol_rejects_revoked_binding_credentials(app_client):
 
     resp = app_client.post(
         "/generic/present",
-        headers={"X-Api-User": username, "X-Api-Key": password},
+        auth=(username, password),
         json={"fqdn": "_acme-challenge.revoked-generic.example.com", "value": "abc123"},
     )
     assert resp.status_code == 401
@@ -418,7 +419,7 @@ def test_generic_protocol_binding_credentials_respect_allowfrom(app_client):
     # allowed 203.0.113.0/24 block, so this must be rejected.
     resp = app_client.post(
         "/generic/present",
-        headers={"X-Api-User": username, "X-Api-Key": password},
+        auth=(username, password),
         json={"fqdn": "_acme-challenge.restricted-generic.example.com", "value": "abc123"},
     )
     assert resp.status_code == 401
