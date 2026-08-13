@@ -14,15 +14,14 @@ import yaml
 from fastapi.testclient import TestClient
 
 
-@pytest.fixture()
-def app_client(tmp_path: Path, monkeypatch):
+def _make_app_client(tmp_path: Path, monkeypatch, acmedns_overrides: dict | None = None):
     db_path = tmp_path / "test.db"
     config = {
         "delegation_zone": "acme.test.example",
         "admin_master_key": "test-admin-key",
         "database_url": f"sqlite:///{db_path}",
         "protocols": {
-            "acmedns": {"enabled": True, "prefix": ""},
+            "acmedns": {"enabled": True, "prefix": "", **(acmedns_overrides or {})},
             "generic": {"enabled": True, "prefix": "/generic"},
             "technitium": {"enabled": True, "prefix": ""},
         },
@@ -43,7 +42,26 @@ def app_client(tmp_path: Path, monkeypatch):
 
     from app.main import create_app
 
-    app = create_app()
+    return create_app()
+
+
+@pytest.fixture()
+def app_client(tmp_path: Path, monkeypatch):
+    app = _make_app_client(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture()
+def direct_update_client(tmp_path: Path, monkeypatch):
+    app = _make_app_client(tmp_path, monkeypatch, acmedns_overrides={"direct_update": True})
+    with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture()
+def fqdn_subdomain_client(tmp_path: Path, monkeypatch):
+    app = _make_app_client(tmp_path, monkeypatch, acmedns_overrides={"accept_fqdn_as_subdomain": True})
     with TestClient(app) as client:
         yield client
 
@@ -79,6 +97,139 @@ def test_register_and_update_flow(app_client):
     )
     assert update.status_code == 200, update.text
     assert update.json() == {"txt": "some-challenge-value"}
+
+
+def test_update_direct_mode_writes_to_real_domain(direct_update_client, caplog):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-direct")
+    crud.add_permission(db, created.owner, r".*\.lab\.example\.com$", is_regex=True)
+    db.close()
+
+    resp = direct_update_client.post(
+        "/register",
+        headers={"X-Admin-Key": "test-admin-key"},
+        json={"owner_username": "team-direct", "fqdn": "gnb1.lab.example.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    with caplog.at_level("INFO", logger="acme_proxy.backends.noop"):
+        update = direct_update_client.post(
+            "/update",
+            headers={"X-Api-User": body["username"], "X-Api-Key": body["password"]},
+            json={"subdomain": body["subdomain"], "txt": "some-challenge-value"},
+        )
+    assert update.status_code == 200, update.text
+    assert update.json() == {"txt": "some-challenge-value"}
+
+    assert any(
+        "NOOP present: _acme-challenge.gnb1.lab.example.com" in record.message for record in caplog.records
+    )
+    assert not any(".acme.test.example" in record.message for record in caplog.records)
+
+
+def test_update_accepts_fqdn_as_subdomain(fqdn_subdomain_client, caplog):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-fqdn")
+    crud.add_permission(db, created.owner, r".*\.lab\.example\.com$", is_regex=True)
+    db.close()
+
+    resp = fqdn_subdomain_client.post(
+        "/register",
+        headers={"X-Admin-Key": "test-admin-key"},
+        json={"owner_username": "team-fqdn", "fqdn": "gnb2.lab.example.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    headers = {"X-Api-User": body["username"], "X-Api-Key": body["password"]}
+
+    # bare real fqdn instead of the random subdomain
+    with caplog.at_level("INFO", logger="acme_proxy.backends.noop"):
+        update = fqdn_subdomain_client.post(
+            "/update", headers=headers, json={"subdomain": "gnb2.lab.example.com", "txt": "value-1"}
+        )
+    assert update.status_code == 200, update.text
+    assert any(
+        "NOOP present: _acme-challenge.gnb2.lab.example.com" in record.message for record in caplog.records
+    )
+
+    # "_acme-challenge."-prefixed real fqdn also accepted
+    caplog.clear()
+    with caplog.at_level("INFO", logger="acme_proxy.backends.noop"):
+        update = fqdn_subdomain_client.post(
+            "/update",
+            headers=headers,
+            json={"subdomain": "_acme-challenge.gnb2.lab.example.com", "txt": "value-2"},
+        )
+    assert update.status_code == 200, update.text
+    assert any(
+        "NOOP present: _acme-challenge.gnb2.lab.example.com" in record.message for record in caplog.records
+    )
+
+    # the classic random subdomain still works too
+    update = fqdn_subdomain_client.post(
+        "/update", headers=headers, json={"subdomain": body["subdomain"], "txt": "value-3"}
+    )
+    assert update.status_code == 200, update.text
+
+
+def test_update_rejects_fqdn_as_subdomain_when_disabled(app_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-fqdn-disabled")
+    crud.add_permission(db, created.owner, r".*\.lab\.example\.com$", is_regex=True)
+    db.close()
+
+    resp = app_client.post(
+        "/register",
+        headers={"X-Admin-Key": "test-admin-key"},
+        json={"owner_username": "team-fqdn-disabled", "fqdn": "gnb3.lab.example.com"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    update = app_client.post(
+        "/update",
+        headers={"X-Api-User": body["username"], "X-Api-Key": body["password"]},
+        json={"subdomain": "gnb3.lab.example.com", "txt": "value"},
+    )
+    assert update.status_code == 401
+
+
+def test_update_rejects_unrelated_fqdn_even_when_enabled(fqdn_subdomain_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-fqdn-scope")
+    crud.add_permission(db, created.owner, r".*\.lab\.example\.com$", is_regex=True)
+    db.close()
+
+    first = fqdn_subdomain_client.post(
+        "/register",
+        headers={"X-Admin-Key": "test-admin-key"},
+        json={"owner_username": "team-fqdn-scope", "fqdn": "gnb4.lab.example.com"},
+    ).json()
+    fqdn_subdomain_client.post(
+        "/register",
+        headers={"X-Admin-Key": "test-admin-key"},
+        json={"owner_username": "team-fqdn-scope", "fqdn": "gnb5.lab.example.com"},
+    )
+
+    update = fqdn_subdomain_client.post(
+        "/update",
+        headers={"X-Api-User": first["username"], "X-Api-Key": first["password"]},
+        json={"subdomain": "gnb5.lab.example.com", "txt": "value"},
+    )
+    assert update.status_code == 401
 
 
 def test_register_rejects_unauthorized_hostname(app_client):

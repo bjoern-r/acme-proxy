@@ -12,6 +12,24 @@ requested fqdn against the owning tenant's HostnamePermission rules before minti
 credentials. In practice this step is a one-time, out-of-band action (see
 scripts/admin_cli.py `create-binding`) -- it does not run on every renewal, so gating it
 doesn't affect ongoing ACME client compatibility at all.
+
+`/update` normally writes the TXT record to "<subdomain>.<delegation_zone>", relying on
+the operator having set up "_acme-challenge.<realdomain> CNAME <subdomain>.
+<delegation_zone>" once out-of-band -- that's the whole point of the acme-dns spec.
+If the `acmedns` protocol config sets `direct_update: true`, /update instead writes
+straight to "_acme-challenge.<binding.fqdn>" (the real domain), skipping the
+delegation_zone/CNAME indirection entirely. This only works if the backend resolved
+for that fqdn is authoritative for the real domain directly (e.g. rfc2136 pointed at
+the customer's own zone) -- it's for operators who want acme-dns-speaking ACME clients
+without asking every tenant to create a CNAME first.
+
+If the `acmedns` protocol config additionally sets `accept_fqdn_as_subdomain: true`,
+/update's "subdomain" field may also be the binding's real fqdn (bare, or already
+"_acme-challenge."-prefixed) instead of the random subdomain -- for clients/hooks that
+were only ever told the real domain and never learned the random subdomain from
+/register. A request that matches this way always writes to
+"_acme-challenge.<binding.fqdn>" directly, independent of `direct_update` (the client
+explicitly named the real domain, so that's what gets updated).
 """
 from __future__ import annotations
 
@@ -31,6 +49,14 @@ from app.models import Binding
 from app.protocols.base import FrontendProtocolBase
 
 logger = logging.getLogger("acme_proxy.protocols.acmedns")
+
+_ACME_CHALLENGE_PREFIX = "_acme-challenge."
+
+
+def _matches_fqdn(candidate: str, fqdn: str) -> bool:
+    candidate = candidate.rstrip(".").lower()
+    fqdn = fqdn.rstrip(".").lower()
+    return candidate == fqdn or candidate == f"{_ACME_CHALLENGE_PREFIX}{fqdn}"
 
 
 class RegisterRequest(BaseModel):
@@ -100,26 +126,37 @@ class AcmeDnsProtocol(FrontendProtocolBase):
                 )
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "source IP not permitted for these credentials")
 
-            if req.subdomain != binding.subdomain:
+            settings = get_settings()
+            protocol_cfg = settings.protocols.get("acmedns")
+            accept_fqdn_as_subdomain = bool(protocol_cfg and protocol_cfg.accept_fqdn_as_subdomain)
+
+            matched_fqdn = accept_fqdn_as_subdomain and _matches_fqdn(req.subdomain, binding.fqdn)
+            if req.subdomain != binding.subdomain and not matched_fqdn:
                 # Matches real acme-dns behaviour: credentials are scoped to exactly
                 # one subdomain; requesting a different one is a hard auth failure.
+                # (accept_fqdn_as_subdomain widens "one subdomain" to also accept the
+                # binding's own real fqdn as an alternative spelling of that same
+                # target, not to a different target.)
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "subdomain does not match credentials")
 
-            settings = get_settings()
-            fulldomain = f"{binding.subdomain}.{settings.delegation_zone}"
+            if matched_fqdn or (protocol_cfg is not None and protocol_cfg.direct_update):
+                # No CNAME delegation involved: write straight to the real domain's
+                # own "_acme-challenge." name, so the backend for binding.fqdn must be
+                # authoritative for that domain directly.
+                target_fqdn = f"_acme-challenge.{binding.fqdn}"
+            else:
+                target_fqdn = f"{binding.subdomain}.{settings.delegation_zone}"
+
             try:
-                backend = get_registry().resolve(fulldomain)
+                backend = get_registry().resolve(target_fqdn)
             except UnroutableHostname as exc:
-                logger.error("no backend route for %s: %s", fulldomain, exc)
+                logger.error("no backend route for %s: %s", target_fqdn, exc)
                 raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no backend configured for this domain") from exc
 
             try:
-                # No "_acme-challenge." prefix here: the client's real domain already
-                # has "_acme-challenge.<realdomain> CNAME <fulldomain>", so this proxy
-                # only needs to be authoritative for TXT at <fulldomain> itself.
-                backend.present(fulldomain, req.txt)
+                backend.present(target_fqdn, req.txt)
             except Exception as exc:  # noqa: BLE001 -- surface upstream failure to the client
-                logger.exception("backend present() failed for %s", fulldomain)
+                logger.exception("backend present() failed for %s", target_fqdn)
                 raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"upstream DNS update failed: {exc}") from exc
 
             crud.update_last_txt_value(db, binding, req.txt)

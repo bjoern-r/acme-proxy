@@ -114,6 +114,22 @@ _acme-challenge.n104.lab.foo.example.biz. CNAME 8f2b....acme.example.org.
 Then configure your ACME client (this is 100% standard acme-dns, so Traefik/acme.sh/lego
 need zero plugins — see their docs for `ACME_DNS_*` / `ACMEDNS_*` env vars).
 
+If the backend routed for a tenant's real domain is authoritative for that domain
+directly (e.g. `rfc2136` pointed at the customer's own zone), you can skip the CNAME
+step entirely by setting `direct_update: true` on the `acmedns` protocol in
+`config.yaml`. `/update` then writes the TXT record straight to
+`_acme-challenge.<realdomain>` instead of `<subdomain>.<delegation_zone>` — `create-binding`
+prints just the username/password in that mode, no CNAME instructions. This is a
+per-protocol setting, not per-binding: it applies to every acme-dns binding once
+enabled.
+
+For clients/hooks that only ever know the real domain being validated — never the
+random subdomain from `/register` — set `accept_fqdn_as_subdomain: true` on the
+`acmedns` protocol. `/update`'s `subdomain` field then also accepts the binding's own
+real fqdn (bare or `_acme-challenge.`-prefixed) as an alternative to the random
+subdomain; a request matched this way always writes directly to
+`_acme-challenge.<realdomain>`, regardless of `direct_update`.
+
 ### 2b. generic protocol: no pre-registration needed
 
 The generic protocol checks the owner's permissions on every call, so there's no

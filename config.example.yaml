@@ -15,6 +15,18 @@ protocols:
   acmedns:
     enabled: true
     prefix: ""            # acme-dns spec expects /register and /update at root
+    direct_update: false  # if true, /update writes TXT straight to
+                           # "_acme-challenge.<realdomain>" instead of
+                           # "<subdomain>.<delegation_zone>" -- skips the CNAME
+                           # delegation dance entirely, but only works if the backend
+                           # resolved for the real domain is authoritative for it
+                           # directly. See app/protocols/acmedns.py's module docstring.
+    accept_fqdn_as_subdomain: false  # if true, /update's "subdomain" field may also be
+                           # the binding's real fqdn (bare or "_acme-challenge."-
+                           # prefixed) instead of the random subdomain -- for
+                           # clients/hooks that only know the real domain. Always
+                           # writes directly to "_acme-challenge.<realdomain>" when
+                           # matched this way, regardless of direct_update.
   generic:
     enabled: true
     prefix: "/generic"    # lego-httpreq-style: /generic/present, /generic/cleanup

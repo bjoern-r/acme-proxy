@@ -18,6 +18,21 @@ from pydantic import BaseModel, Field
 class ProtocolConfig(BaseModel):
     enabled: bool = True
     prefix: str = ""
+    # acme-dns protocol only (harmless no-op for other protocols): write the TXT
+    # record straight to "_acme-challenge.<binding.fqdn>" via the resolved backend,
+    # instead of "<binding.subdomain>.<delegation_zone>". Use this when the backend
+    # for that fqdn can be authoritative for the real domain directly, so no
+    # "_acme-challenge.<realdomain> CNAME <subdomain>.<delegation_zone>" delegation
+    # record needs to exist at all. See app/protocols/acmedns.py.
+    direct_update: bool = False
+    # acme-dns protocol only (harmless no-op for other protocols): also accept the
+    # binding's real fqdn (with or without a "_acme-challenge." prefix) as a valid
+    # value for /update's "subdomain" field, in addition to the classic randomly
+    # generated subdomain. For clients/hooks that only know the real domain they're
+    # requesting a cert for and were never told the random subdomain. A match via the
+    # real fqdn always writes directly to "_acme-challenge.<binding.fqdn>", regardless
+    # of `direct_update`. See app/protocols/acmedns.py.
+    accept_fqdn_as_subdomain: bool = False
 
 
 class BackendRouteConfig(BaseModel):

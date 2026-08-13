@@ -95,17 +95,25 @@ def create_binding(
         from app.config import get_settings
 
         settings = get_settings()
+        protocol_cfg = settings.protocols.get("acmedns")
+        direct_update = bool(protocol_cfg and protocol_cfg.direct_update)
         fulldomain = f"{created.binding.subdomain}.{settings.delegation_zone}"
         typer.echo("binding created:")
         typer.echo(f"  fqdn      : {fqdn}")
         typer.echo(f"  username  : {created.binding.username}")
         typer.echo(f"  password  : {created.plaintext_password}   (shown once -- store it now)")
         typer.echo(f"  subdomain : {created.binding.subdomain}")
-        typer.echo(f"  fulldomain: {fulldomain}")
+        if not direct_update:
+            typer.echo(f"  fulldomain: {fulldomain}")
         typer.echo()
-        typer.echo(f"Create this CNAME once, then configure your ACME client with the")
-        typer.echo(f"username/password above:")
-        typer.echo(f"  _acme-challenge.{fqdn}.  CNAME  {fulldomain}.")
+        if direct_update:
+            typer.echo("acmedns protocol has direct_update enabled -- no CNAME needed, the proxy")
+            typer.echo(f"writes TXT records straight to _acme-challenge.{fqdn}. Just configure your")
+            typer.echo("ACME client with the username/password above.")
+        else:
+            typer.echo(f"Create this CNAME once, then configure your ACME client with the")
+            typer.echo(f"username/password above:")
+            typer.echo(f"  _acme-challenge.{fqdn}.  CNAME  {fulldomain}.")
     finally:
         db.close()
 
