@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.backends.registry import UnroutableHostname, get_registry
 from app.database import get_db
-from app.hostmatch import is_authorized
+from app.hostmatch import is_authorized_for_challenge
 from app.models import Owner
 from app.protocols.base import FrontendProtocolBase
 from app.security import verify_secret
@@ -98,7 +98,7 @@ class TechnitiumProtocol(FrontendProtocolBase):
                 }
 
             perms = crud.list_permissions(db, owner)
-            if not is_authorized(domain, perms):
+            if not is_authorized_for_challenge(domain, perms):
                 return {
                     "status": "error",
                     "errorMessage": f"{owner.username!r} is not permitted to request records for {domain!r}",

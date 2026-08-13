@@ -5,9 +5,10 @@ call carrying the real FQDN on every request), and it exercises full per-request
 regex/exact hostname authorization instead of the acme-dns protocol's
 "authorize once at binding-creation time" model.
 
-Any ACME client whose native DNS provider is a generic HTTP hook (lego's `httpreq`,
-or a custom acme.sh dns_myapi.sh you write once against this exact shape) can talk to
+Any ACME client whose native DNS provider is a generic HTTP hook (lego/traefik `httpreq`,
+or acme.sh `dns_acmeproxy.sh` or caddy `acmeproxy`) can talk to
 this without acme-dns's one-time-registration step at all.
+The protocol is taken from https://github.com/madcamel/acmeproxy.pl
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from pydantic import BaseModel
 from app import crud
 from app.auth import get_current_owner
 from app.backends.registry import UnroutableHostname, get_registry
-from app.hostmatch import is_authorized
+from app.hostmatch import is_authorized_for_challenge
 from app.models import Owner
 from app.protocols.base import FrontendProtocolBase
 from app.database import get_db
@@ -50,7 +51,7 @@ class GenericProtocol(FrontendProtocolBase):
 
         def _authorize_and_resolve(fqdn: str, owner: Owner, db: Session):
             perms = crud.list_permissions(db, owner)
-            if not is_authorized(fqdn, perms):
+            if not is_authorized_for_challenge(fqdn, perms):
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN,
                     f"{owner.username!r} is not permitted to request records for {fqdn!r}",

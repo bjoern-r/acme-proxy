@@ -131,6 +131,28 @@ def test_generic_protocol_present_and_cleanup(app_client):
     assert cleanup_no_value.status_code == 200, cleanup_no_value.text
 
 
+def test_generic_protocol_exact_permission_covers_acme_challenge_prefix(app_client):
+    """A HostnamePermission is granted against the real-world domain (see README's
+    "Authorization model"), but real DNS-01 clients always request the TXT record at
+    `_acme-challenge.<realdomain>` -- an exact-match permission on the real domain must
+    still authorize that prefixed request."""
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-j")
+    crud.add_permission(db, created.owner, "exact.example.org", is_regex=False)
+    db.close()
+
+    headers = {"X-Api-User": "team-j", "X-Api-Key": created.plaintext_api_key}
+    present = app_client.post(
+        "/generic/present",
+        headers=headers,
+        json={"fqdn": "_acme-challenge.exact.example.org", "value": "abc123"},
+    )
+    assert present.status_code == 200, present.text
+
+
 def test_generic_protocol_rejects_unauthorized_fqdn(app_client):
     from app import crud
     from app.database import SessionLocal
@@ -221,6 +243,48 @@ def test_technitium_protocol_add_and_delete(app_client):
     )
     assert delete.status_code == 200, delete.text
     assert delete.json()["status"] == "ok"
+
+
+def test_technitium_protocol_accepts_form_encoded_post(app_client):
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-i")
+    crud.add_permission(db, created.owner, r".*\.example\.net$", is_regex=True)
+    db.close()
+
+    token = f"team-i:{created.plaintext_api_key}"
+
+    add = app_client.post(
+        "/api/zones/records/add",
+        data={"token": token, "domain": "_acme-challenge.foo.example.net", "type": "TXT", "text": "abc123"},
+    )
+    assert add.status_code == 200, add.text
+    assert add.json()["status"] == "ok"
+
+
+def test_technitium_protocol_exact_permission_covers_acme_challenge_prefix(app_client):
+    """Same real-domain-vs-challenge-prefix gap as the generic protocol test above --
+    an exact-match permission on the real domain (no `_acme-challenge.` prefix) must
+    still authorize a `domain` param that has it, since real Technitium clients (e.g.
+    acme.sh's dns_technitium) always send the prefixed name."""
+    from app import crud
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    created = crud.create_owner(db, "team-k")
+    crud.add_permission(db, created.owner, "exact.example.net", is_regex=False)
+    db.close()
+
+    token = f"team-k:{created.plaintext_api_key}"
+    add = app_client.get(
+        "/api/zones/records/add",
+        params={"domain": "_acme-challenge.exact.example.net", "type": "TXT", "text": "abc123"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert add.status_code == 200, add.text
+    assert add.json()["status"] == "ok"
 
 
 def test_technitium_protocol_rejects_bad_token(app_client):
