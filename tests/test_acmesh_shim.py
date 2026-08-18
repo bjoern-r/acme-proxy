@@ -126,3 +126,27 @@ def test_hmac_helper_matches_real_acme_sh_semantics(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == expected
+
+
+def test_acmesh_backend_strips_trailing_dot_from_fqdn(tmp_path):
+    """Regression test: some ACME clients (e.g. acme.sh's dns_acmeproxy hook talking
+    to this proxy's /generic protocol) hand over an fqdn with a trailing dot. Real
+    acme.sh dnsapi scripts assume no trailing dot -- passing one through breaks
+    provider zone lookups/API calls downstream. AcmeShDNSApiBackend must strip it
+    before invoking the script."""
+    from app.backends.acmesh import AcmeShDNSApiBackend
+
+    dnsapi_dir = tmp_path / "dnsapi"
+    dnsapi_dir.mkdir()
+    captured = tmp_path / "captured.txt"
+    (dnsapi_dir / "dns_fake.sh").write_text(
+        "dns_fake_add() {\n"
+        f'  printf "%s" "$1" > "{captured}"\n'
+        "}\n"
+        "dns_fake_rm() { :; }\n"
+    )
+
+    backend = AcmeShDNSApiBackend(dnsapi_script="dns_fake", acme_sh_home=str(tmp_path))
+    backend.present("_acme-challenge.example.com.", "some-value")
+
+    assert captured.read_text() == "_acme-challenge.example.com"

@@ -59,9 +59,16 @@ class AcmeShDNSApiBackend(DNSBackend):
             )
 
     def present(self, fqdn: str, value: str) -> None:
+        # Real acme.sh dnsapi scripts assume an fqdn with no trailing dot (that's what
+        # acme.sh's own core always passes them) -- some ACME clients/protocols here
+        # hand us one with a trailing dot instead, which then breaks provider zone
+        # lookups/API calls downstream. Strip it before it ever reaches the script.
+        fqdn = fqdn.rstrip(".")
+        logger.debug("before acme.sh(%s) present: %s TXT %r", self.func_prefix, fqdn, value)
         self._run("add", fqdn, value)
         logger.info("acme.sh(%s) present: %s TXT %r", self.func_prefix, fqdn, value)
 
     def cleanup(self, fqdn: str, value: str) -> None:
+        fqdn = fqdn.rstrip(".")
         self._run("rm", fqdn, value)
         logger.info("acme.sh(%s) cleanup: %s TXT %r", self.func_prefix, fqdn, value)
