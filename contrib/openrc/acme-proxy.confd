@@ -1,0 +1,41 @@
+# /etc/conf.d/acme-proxy
+#
+# All values below are OPTIONAL -- the init script has sensible defaults.
+# Uncomment and edit only what you want to change.
+
+# Where the acme-proxy code (app/ package + scripts/) lives.
+# ACME_PROXY_HOME=/srv/acme-proxy
+
+# Path to your config.yaml (the app reads this env var, then falls back to
+# ./config.yaml in its working directory).
+# ACME_PROXY_CONFIG=/etc/acme-proxy/config.yaml
+
+# Optional Python venv. If its uvicorn exists, it's used; otherwise the system
+# uvicorn is used.
+# ACME_PROXY_VENV=/srv/acme-proxy/.venv
+
+# Unprivileged account to run as. Create it once (see contrib/openrc/README.md).
+# ACME_PROXY_USER=acme-proxy
+# ACME_PROXY_GROUP=acme-proxy
+
+# Listen settings. If you front this with a TLS-terminating reverse proxy,
+# bind to 127.0.0.1 instead.
+# ACME_PROXY_HOST=0.0.0.0
+# ACME_PROXY_PORT=8000
+
+# Number of worker processes. Keep 1 with the default sqlite database_url; use
+# more only with a server DB (e.g. PostgreSQL) to avoid sqlite write locking.
+# ACME_PROXY_WORKERS=1
+# ACME_PROXY_LOG_LEVEL=info
+
+# Extra uvicorn flags, appended verbatim and whitespace-split (no shell quoting).
+# Example when running behind a TLS-terminating reverse proxy:
+# ACME_PROXY_EXTRA_ARGS="--proxy-headers --forwarded-allow-ips=127.0.0.1"
+
+# Where the default relative sqlite path resolves
+# (sqlite:///./data/acme_proxy.db -> ${ACME_PROXY_HOME}/data/). If you switch
+# database_url to an absolute path or PostgreSQL, this is just unused.
+# ACME_PROXY_DATA_DIR=/srv/acme-proxy/data
+
+# ACME_PROXY_LOGFILE=/var/log/acme-proxy/acme-proxy.log
+# ACME_PROXY_PIDFILE=/run/acme-proxy.pid

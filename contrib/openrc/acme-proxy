@@ -1,0 +1,126 @@
+#!/sbin/openrc-run
+#
+# OpenRC service script for acme-proxy (Alpine Linux / any OpenRC system).
+#
+# Install:
+#   cp contrib/openrc/acme-proxy       /etc/init.d/acme-proxy
+#   chmod +x /etc/init.d/acme-proxy
+#   cp contrib/openrc/acme-proxy.confd /etc/conf.d/acme-proxy
+#   rc-update add acme-proxy default
+#   rc-service acme-proxy initdb   # one-time, idempotent, runs as the service user
+#   rc-service acme-proxy start
+#
+# All tunables live in /etc/conf.d/acme-proxy; the defaults below are used only
+# when nothing is set there.
+
+name="acme-proxy"
+description="Multi-tenant DNS-01 challenge proxy for ACME clients"
+
+# --- defaults (override in /etc/conf.d/acme-proxy) -------------------------
+: ${ACME_PROXY_HOME:=/srv/acme-proxy}             # where the app/ package + scripts/ live
+: ${ACME_PROXY_CONFIG:=/etc/acme-proxy/config.yaml}
+: ${ACME_PROXY_VENV:=${ACME_PROXY_HOME}/.venv}     # optional; falls back to system uvicorn
+: ${ACME_PROXY_USER:=acme-proxy}
+: ${ACME_PROXY_GROUP:=acme-proxy}
+: ${ACME_PROXY_HOST:=0.0.0.0}
+: ${ACME_PROXY_PORT:=8000}
+: ${ACME_PROXY_WORKERS:=1}                         # keep 1 with the default sqlite DB
+: ${ACME_PROXY_LOG_LEVEL:=info}
+: ${ACME_PROXY_EXTRA_ARGS:=}                       # e.g. "--proxy-headers --forwarded-allow-ips=127.0.0.1"
+: ${ACME_PROXY_LOGFILE:=/var/log/acme-proxy/acme-proxy.log}
+: ${ACME_PROXY_DATA_DIR:=${ACME_PROXY_HOME}/data}  # for the default relative sqlite path
+: ${ACME_PROXY_PIDFILE:=/run/${RC_SVCNAME}.pid}
+
+# The app reads config from $ACME_PROXY_CONFIG (falling back to ./config.yaml in
+# cwd). We set both the env var and a working dir so it never silently picks the
+# wrong file (see CLAUDE.md gotcha #1). PATH is widened so the acme.sh shim
+# backend can find bash/curl.
+export ACME_PROXY_CONFIG
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+
+# uvicorn does not self-daemonize -> let OpenRC background it and own the PID.
+command_background=true
+pidfile="${ACME_PROXY_PIDFILE}"
+output_log="${ACME_PROXY_LOGFILE}"
+error_log="${ACME_PROXY_LOGFILE}"
+directory="${ACME_PROXY_HOME}"
+command_user="${ACME_PROXY_USER}:${ACME_PROXY_GROUP}"
+retry="TERM/30/KILL/5"   # uvicorn drains in-flight requests on SIGTERM
+
+extra_commands="initdb"
+
+depend() {
+    need net localmount
+    after firewall
+}
+
+checkconfig() {
+    if [ ! -f "${ACME_PROXY_CONFIG}" ]; then
+        eerror "config not found: ${ACME_PROXY_CONFIG}"
+        eerror "copy config.example.yaml there and edit it, or set"
+        eerror "ACME_PROXY_CONFIG in /etc/conf.d/acme-proxy."
+        return 1
+    fi
+}
+
+# Log dir + sqlite data dir, owned by the service user so it can write state.
+_ensure_dirs() {
+    checkpath -d -m 0750 -o "${command_user}" "$(dirname "${ACME_PROXY_LOGFILE}")"
+    checkpath -d -m 0750 -o "${command_user}" "${ACME_PROXY_DATA_DIR}"
+}
+
+# Prefer the project venv, fall back to a system-installed uvicorn.
+_resolve_command() {
+    if [ -x "${ACME_PROXY_VENV}/bin/uvicorn" ]; then
+        command="${ACME_PROXY_VENV}/bin/uvicorn"
+    elif command -v uvicorn >/dev/null 2>&1; then
+        command="$(command -v uvicorn)"
+    else
+        eerror "uvicorn not found."
+        eerror "create a venv: python3 -m venv ${ACME_PROXY_VENV} &&"
+        eerror "  ${ACME_PROXY_VENV}/bin/pip install -r ${ACME_PROXY_HOME}/requirements.txt"
+        eerror "or install system-wide: apk add py3-uvicorn"
+        return 1
+    fi
+}
+
+_build_args() {
+    command_args="app.main:app --host ${ACME_PROXY_HOST} --port ${ACME_PROXY_PORT}"
+    case "${ACME_PROXY_WORKERS:-1}" in
+        ''|*[!0-9]*) ACME_PROXY_WORKERS=1 ;;
+    esac
+    [ "${ACME_PROXY_WORKERS}" -gt 1 ] && \
+        command_args="${command_args} --workers ${ACME_PROXY_WORKERS}"
+    command_args="${command_args} --log-level ${ACME_PROXY_LOG_LEVEL}"
+    [ -n "${ACME_PROXY_EXTRA_ARGS}" ] && \
+        command_args="${command_args} ${ACME_PROXY_EXTRA_ARGS}"
+}
+
+start_pre() {
+    checkconfig || return 1
+    _resolve_command || return 1
+    _build_args
+    _ensure_dirs
+}
+
+# rc-service acme-proxy initdb -- one-time schema creation (idempotent).
+# Runs as ${ACME_PROXY_USER} so the sqlite file is owned by the service account
+# (running it as root would leave the DB root-owned and the service couldn't write it).
+initdb() {
+    checkconfig || return 1
+    _ensure_dirs || return 1
+    local py
+    if [ -x "${ACME_PROXY_VENV}/bin/python" ]; then
+        py="${ACME_PROXY_VENV}/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        py="$(command -v python3)"
+    else
+        eerror "python3 not found (apk add python3 or create a venv)."
+        return 1
+    fi
+    ebegin "Initializing acme-proxy database"
+    su -s /bin/sh -c \
+      "cd '${ACME_PROXY_HOME}' && ACME_PROXY_CONFIG='${ACME_PROXY_CONFIG}' '${py}' '${ACME_PROXY_HOME}/scripts/admin_cli.py' init-db" \
+      "${ACME_PROXY_USER}"
+    eend $?
+}
